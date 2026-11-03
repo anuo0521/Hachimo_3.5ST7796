@@ -36,6 +36,7 @@
 #include "libs/tjpgd/tjpgd.h"
 #include "lvgl.h"
 #include "miniz.h"
+#include "sdkconfig.h"
 
 #include "pet_p4_lcd.h"
 #include "pet_p4_miniapp.h"
@@ -5000,6 +5001,71 @@ static void draw_boot_diagnostic(unsigned long long now_ms) {
   fill_rect(PET_P4_UI_WIDTH - marker_w - 16, PET_P4_UI_HEIGHT - marker_h - 16, marker_w, marker_h, orange);
 }
 
+#if CONFIG_PET_P4_PANEL_ST7796_SPI
+/* The replacement ST7796 panel is 480x320 in landscape. The UI stays authored at
+ * 640x480, so each frame is uniformly scaled to 424x320 and centred, leaving a
+ * 28 px black pillar on either side instead of squeezing the pet horizontally. */
+#define PET_P4_PANEL_FIT_WIDTH 424
+#define PET_P4_PANEL_FIT_OFFSET_X 28
+
+static esp_err_t rotate_landscape_to_panel(void) {
+  if (!g_framebuffer || !g_native_framebuffer) return ESP_ERR_INVALID_STATE;
+  if (g_ppa_srm_client
+      && g_framebuffer_ppa_compatible
+      && g_native_framebuffer_ppa_compatible) {
+    ppa_srm_oper_config_t scale = {
+      .in = {
+        .buffer = g_framebuffer,
+        .pic_w = PET_P4_UI_WIDTH,
+        .pic_h = PET_P4_UI_HEIGHT,
+        .block_w = PET_P4_UI_WIDTH,
+        .block_h = PET_P4_UI_HEIGHT,
+        .block_offset_x = 0,
+        .block_offset_y = 0,
+        .srm_cm = PPA_SRM_COLOR_MODE_RGB565,
+      },
+      .out = {
+        .buffer = g_native_framebuffer,
+        .buffer_size = BSP_LCD_H_RES * BSP_LCD_V_RES * sizeof(uint16_t),
+        .pic_w = BSP_LCD_H_RES,
+        .pic_h = BSP_LCD_V_RES,
+        .block_offset_x = PET_P4_PANEL_FIT_OFFSET_X,
+        .block_offset_y = 0,
+        .srm_cm = PPA_SRM_COLOR_MODE_RGB565,
+      },
+      .rotation_angle = PPA_SRM_ROTATION_ANGLE_0,
+      .scale_x = (float) PET_P4_PANEL_FIT_WIDTH / (float) PET_P4_UI_WIDTH,
+      .scale_y = (float) BSP_LCD_V_RES / (float) PET_P4_UI_HEIGHT,
+      .rgb_swap = false,
+      .byte_swap = false,
+      .mode = PPA_TRANS_MODE_BLOCKING,
+    };
+    esp_err_t err = ppa_do_scale_rotate_mirror(g_ppa_srm_client, &scale);
+    if (err == ESP_OK) {
+      if (!g_logged_ppa_rotation) {
+        ESP_LOGI(TAG, "ST7796 fit=PPA ui=%dx%d -> %dx%d offset_x=%d",
+          PET_P4_UI_WIDTH, PET_P4_UI_HEIGHT, PET_P4_PANEL_FIT_WIDTH, BSP_LCD_V_RES,
+          PET_P4_PANEL_FIT_OFFSET_X);
+        g_logged_ppa_rotation = true;
+      }
+      return ESP_OK;
+    }
+    if (!g_logged_ppa_fallback) {
+      ESP_LOGW(TAG, "P4 PPA scaling failed (%s); using CPU fallback", esp_err_to_name(err));
+      g_logged_ppa_fallback = true;
+    }
+  }
+  for (int y = 0; y < BSP_LCD_V_RES; y += 1) {
+    int source_y = y * PET_P4_UI_HEIGHT / BSP_LCD_V_RES;
+    const uint16_t *src = g_framebuffer + (size_t) source_y * PET_P4_UI_WIDTH;
+    uint16_t *dst = g_native_framebuffer + (size_t) y * BSP_LCD_H_RES + PET_P4_PANEL_FIT_OFFSET_X;
+    for (int x = 0; x < PET_P4_PANEL_FIT_WIDTH; x += 1) {
+      dst[x] = src[x * PET_P4_UI_WIDTH / PET_P4_PANEL_FIT_WIDTH];
+    }
+  }
+  return ESP_OK;
+}
+#else
 static esp_err_t rotate_landscape_to_panel(void) {
   if (!g_framebuffer || !g_native_framebuffer) return ESP_ERR_INVALID_STATE;
   /* Every producer and the ST7701S panel use the same RGB565 element order. */
@@ -5057,6 +5123,7 @@ static esp_err_t rotate_landscape_to_panel(void) {
   }
   return ESP_OK;
 }
+#endif
 
 esp_err_t pet_p4_renderer_init(void) {
   if (!g_framebuffer) {

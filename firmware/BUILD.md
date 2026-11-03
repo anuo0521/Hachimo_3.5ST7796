@@ -58,6 +58,41 @@ node pc/scripts/package-factory-release.mjs \
 
 输出 ZIP 名称包含 v1/v3，内含中文烧录指南、完整镜像、分段 bin、形象/组件资料、校验清单及 macOS/Windows 烧录入口。工具读取实际芯片版本，与 Bootloader 和应用镜像都匹配后才擦除。首次烧录使用完整镜像及包内工具；日常 OTA 使用 PC 随包的应用升级镜像。
 
+## 更换屏幕：3.5 寸 ST7796 / Replacement 3.5" panel
+
+原配微雪 4.3 寸 ST7701（MIPI DSI，480x640）已停产。替换屏为鸿讯电子
+**CL35BC1017-40A**（ST7796S，4 线 SPI，320x480 玻璃，FT6336U 电容触摸）。
+`main/Kconfig.projbuild` 里新增 `PET P4 hardware` 菜单，默认已选中 ST7796：
+
+```sh
+cd firmware
+idf.py menuconfig     # PET P4 hardware -> Installed LCD panel
+idf.py build
+```
+
+默认接线（全部可在 menuconfig 改，改完重新 build 即可）：
+
+| 信号 | 默认 GPIO | 配置项 |
+| --- | --- | --- |
+| SCLK | 20 | `PET_P4_LCD_PIN_SCLK` |
+| MOSI (SDA) | 21 | `PET_P4_LCD_PIN_MOSI` |
+| CS | 22 | `PET_P4_LCD_PIN_CS` |
+| D/C (RS) | 23 | `PET_P4_LCD_PIN_DC` |
+| RESET | 51 | `PET_P4_LCD_PIN_RST`（接板级复位时设 -1） |
+| 背光 BL | 26 | `PET_P4_LCD_PIN_BACKLIGHT` |
+| CTP SDA | 7 | `PET_P4_TOUCH_I2C_SDA` |
+| CTP SCL | 8 | `PET_P4_TOUCH_I2C_SCL` |
+
+- SPI 时钟默认 40 MHz（`PET_P4_LCD_SPI_CLOCK_HZ`）。ST7796S 手册的串行写周期只保证到 15 MHz，
+  40 MHz 在短线转接板上普遍可用；出现花屏先降到 20 MHz 再排查。
+- 屏幕在驱动里按横屏（MADCTL MV）寻址，即 480x320。UI 仍是 640x480，渲染时等比缩到
+  424x320 居中，左右各留 28 px 黑边；不想留黑边就得重排 UI，见
+  `pet_p4_renderer.c` 的 `PET_P4_PANEL_FIT_*`。
+- 画面上下/左右翻：`PET_P4_LCD_MIRROR_X` / `PET_P4_LCD_MIRROR_Y`。
+  触摸方向相反时改 `PET_P4_TOUCH_MIRROR_X` / `PET_P4_TOUCH_MIRROR_Y`（两组互相独立）。
+- 触摸沿用工程里既有的 FT6336U 寄存器路径（0x38，寄存器 0x02），不需要 GT911 组件。
+- 回到原微雪屏：menuconfig 里选 `Waveshare 4.3" ST7701`，BSP 路径原样保留。
+
 ## 注意 / Caution
 
 完整出厂烧录会覆盖设备上的原有配置和素材，操作前自行备份。烧录前核对板型、Flash 容量和 SHA-256，传输过程中不要拔线。Live-device tests and flashing are manual opt-in operations and are not run by source CI.

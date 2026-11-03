@@ -16,6 +16,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 
 #include "pet_p4_assets.h"
 #include "pet_p4_miniapp.h"
@@ -38,6 +39,30 @@ static unsigned int g_reaction_sequence;
 static bool g_ready;
 static const char *g_init_stage = "not_started";
 static esp_err_t g_init_error, g_primary_error, g_backup_error;
+
+#if CONFIG_PET_P4_PANEL_ST7796_SPI
+/* The ST7796 adapter board carries an FT6336U on its own I2C pair, which is not
+ * the Waveshare BSP bus. Own the bus here so touch and diagnostics agree. */
+static i2c_master_bus_handle_t g_touch_i2c_bus;
+
+static esp_err_t touch_i2c_bus_get(i2c_master_bus_handle_t *out) {
+  if (!g_touch_i2c_bus) {
+    i2c_master_bus_config_t bus_config = {
+      .i2c_port = I2C_NUM_0,
+      .sda_io_num = CONFIG_PET_P4_TOUCH_I2C_SDA,
+      .scl_io_num = CONFIG_PET_P4_TOUCH_I2C_SCL,
+      .clk_source = I2C_CLK_SRC_DEFAULT,
+      .glitch_ignore_cnt = 7,
+      .flags.enable_internal_pullup = true,
+    };
+    esp_err_t err = i2c_new_master_bus(&bus_config, &g_touch_i2c_bus);
+    if (err != ESP_OK) return err;
+  }
+  *out = g_touch_i2c_bus;
+  return ESP_OK;
+}
+#endif
+
 static esp_err_t g_probe_15 = ESP_ERR_INVALID_STATE, g_probe_38 = ESP_ERR_INVALID_STATE, g_probe_10 = ESP_ERR_INVALID_STATE,
                  g_probe_18 = ESP_ERR_INVALID_STATE;
 static int g_address;
@@ -210,14 +235,22 @@ esp_err_t pet_p4_touch_init(void) {
   g_address = 0;
   g_cst826 = g_ft6336 = false;
   g_init_stage = "i2c_init";
+#if CONFIG_PET_P4_PANEL_ST7796_SPI
+  i2c_master_bus_handle_t i2c_bus = NULL;
+  esp_err_t err = touch_i2c_bus_get(&i2c_bus);
+  if (err != ESP_OK) { g_init_error = err; return err; }
+  if (!i2c_bus) { g_init_error = ESP_ERR_INVALID_STATE; return g_init_error; }
+#else
   esp_err_t err = bsp_i2c_init();
   if (err != ESP_OK) { g_init_error = err; return err; }
   i2c_master_bus_handle_t i2c_bus = bsp_i2c_get_handle();
   if (!i2c_bus) { g_init_error = ESP_ERR_INVALID_STATE; return g_init_error; }
+#endif
 
   esp_lcd_panel_io_i2c_config_t io_config = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
   g_init_stage = "probe";
   g_primary_error = g_backup_error = ESP_ERR_NOT_FOUND;
+#if !CONFIG_PET_P4_PANEL_ST7796_SPI
   /* Allow controller power-up, bounded to under one second. No shared bus
    * reset and no speculative GPIO drive: the installed panel must be verified. */
   for (unsigned attempt = 0; attempt < 4 && !g_address; attempt++) {
@@ -229,6 +262,7 @@ esp_err_t pet_p4_touch_init(void) {
     }
     if (!g_address && attempt < 3) vTaskDelay(pdMS_TO_TICKS(100));
   }
+#endif
   if (!g_address) {
     /* Address ACKs only, not controller identification or register writes.
      * Distinguish missing GT911 from an entirely unreachable shared bus. */
@@ -238,8 +272,14 @@ esp_err_t pet_p4_touch_init(void) {
     g_probe_18 = i2c_master_probe(i2c_bus, 0x18, 50);
     g_init_error = (g_primary_error == ESP_ERR_TIMEOUT || g_backup_error == ESP_ERR_TIMEOUT)
       ? ESP_ERR_TIMEOUT : ESP_ERR_NOT_FOUND;
+#if CONFIG_PET_P4_PANEL_ST7796_SPI
+    ESP_LOGW(TAG, "touch probe failed SDA=%d SCL=%d 0x38=%s 0x15=%s; reset not driven",
+      CONFIG_PET_P4_TOUCH_I2C_SDA, CONFIG_PET_P4_TOUCH_I2C_SCL,
+      esp_err_to_name(g_probe_38), esp_err_to_name(g_probe_15));
+#else
     ESP_LOGW(TAG, "GT911 probe failed SDA=%d SCL=%d 0x5d=%s 0x14=%s; reset not driven",
       BSP_I2C_SDA, BSP_I2C_SCL, esp_err_to_name(g_primary_error), esp_err_to_name(g_backup_error));
+#endif
     if (g_probe_38 != ESP_OK && g_probe_15 != ESP_OK) return g_init_error;
     io_config = (esp_lcd_panel_io_i2c_config_t){
       .dev_addr = 0x38, .scl_speed_hz = 100000, .control_phase_bytes = 1,
@@ -551,4 +591,40 @@ void pet_p4_touch_process(
 
 unsigned int pet_p4_touch_dropped_events(void) {
   return atomic_load_explicit(&g_dropped_events, memory_order_relaxed);
+}
+
+int pet_p4_touch_i2c_scan(char *buffer, size_t buffer_size) {
+  if (!buffer || buffer_size == 0) return 0;
+  buffer[0] = '\0';
+
+#if CONFIG_PET_P4_PANEL_ST7796_SPI
+  i2c_master_bus_handle_t bus = NULL;
+  esp_err_t init_err = touch_i2c_bus_get(&bus);
+#else
+  esp_err_t init_err = bsp_i2c_init();
+  i2c_master_bus_handle_t bus = init_err == ESP_OK ? bsp_i2c_get_handle() : NULL;
+#endif
+  if (init_err != ESP_OK) {
+    snprintf(buffer, buffer_size, "init:%s", esp_err_to_name(init_err));
+    return 0;
+  }
+  if (!bus) {
+    snprintf(buffer, buffer_size, "no-bus");
+    return 0;
+  }
+
+  int found = 0;
+  size_t used = 0;
+  for (uint8_t addr = 0x08; addr <= 0x77; addr += 1) {
+    if (i2c_master_probe(bus, addr, 50) != ESP_OK) continue;
+    int written = snprintf(buffer + used, buffer_size - used, "%s0x%02X", found == 0 ? "" : ",", addr);
+    if (written < 0 || (size_t) written >= buffer_size - used) {
+      buffer[buffer_size - 1] = '\0';
+      break;
+    }
+    used += (size_t) written;
+    found += 1;
+  }
+  ESP_LOGI(TAG, "I2C scan found %d device(s): %s", found, found > 0 ? buffer : "none");
+  return found;
 }

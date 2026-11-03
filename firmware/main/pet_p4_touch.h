@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "esp_err.h"
 #include "pet_p4_protocol.h"
@@ -28,6 +29,8 @@ void pet_p4_touch_process(
   void *ctx
 );
 unsigned int pet_p4_touch_dropped_events(void);
+/* Probes 0x08..0x77 on the touch bus and formats the result as "0x38,0x51". */
+int pet_p4_touch_i2c_scan(char *buffer, size_t buffer_size);
 
 #ifdef __cplusplus
 }

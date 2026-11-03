@@ -46,10 +46,13 @@ idf_component_register(
     esp_adc
     esp_timer
     esp_driver_gpio
+    esp_driver_i2c
     esp_driver_jpeg
     esp_driver_ppa
+    esp_driver_spi
     esp_driver_uart
     esp_driver_usb_serial_jtag
+    esp_lcd_st7796
     espressif__esp_h264
     espressif__esp-sr
     esp_lcd

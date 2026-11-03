@@ -3,8 +3,31 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Host tests compile this translation unit with plain gcc, where sdkconfig.h
+ * does not exist. Without it the panel geometry falls back to the original
+ * 480x640 DSI glass, which is also what those tests assert. */
+#if defined(__has_include)
+#if __has_include("sdkconfig.h")
+#include "sdkconfig.h"
+#endif
+#endif
+
+#define PET_P4_UI_WIDTH 640
+#define PET_P4_UI_HEIGHT 480
+
+#if CONFIG_PET_P4_PANEL_ST7796_SPI
+/* CL35BC1017-40A: 320x480 glass, addressed in landscape (MADCTL MV). */
+#define PET_P4_PANEL_WIDTH 320
+#define PET_P4_PANEL_HEIGHT 480
+#define PET_P4_PANEL_LANDSCAPE_WIDTH 480
+#define PET_P4_PANEL_LANDSCAPE_HEIGHT 320
+/* The renderer fits the 640x480 UI into 424x320 and letterboxes 28 px each side. */
+#define PET_P4_UI_SCALED_WIDTH 424
+#define PET_P4_UI_SCALE_ORIGIN_X 28
+#else
 #define PET_P4_PANEL_WIDTH 480
 #define PET_P4_PANEL_HEIGHT 640
+#endif
 
 bool pet_p4_ft6336_decode(const uint8_t *raw, size_t len, pet_p4_ft6336_frame_t *out) {
   if (!raw || !out || len < 13) return false;
@@ -110,8 +133,25 @@ bool pet_p4_touch_decoder_update(
 void pet_p4_touch_panel_to_ui(int panel_x, int panel_y, int *ui_x, int *ui_y) {
   panel_x = clamp_int(panel_x, 0, PET_P4_PANEL_WIDTH - 1);
   panel_y = clamp_int(panel_y, 0, PET_P4_PANEL_HEIGHT - 1);
+#if CONFIG_PET_P4_PANEL_ST7796_SPI
+  /* The controller reports the glass in its native portrait axes; the LCD is
+   * addressed in landscape, so landscape X comes from the controller's Y. */
+  int landscape_x = panel_y;
+  int landscape_y = panel_x;
+#if CONFIG_PET_P4_TOUCH_MIRROR_X
+  landscape_x = PET_P4_PANEL_LANDSCAPE_WIDTH - 1 - landscape_x;
+#endif
+#if CONFIG_PET_P4_TOUCH_MIRROR_Y
+  landscape_y = PET_P4_PANEL_LANDSCAPE_HEIGHT - 1 - landscape_y;
+#endif
+  int x = (landscape_x - PET_P4_UI_SCALE_ORIGIN_X) * PET_P4_UI_WIDTH / PET_P4_UI_SCALED_WIDTH;
+  int y = landscape_y * PET_P4_UI_HEIGHT / PET_P4_PANEL_LANDSCAPE_HEIGHT;
+  if (ui_x) *ui_x = clamp_int(x, 0, PET_P4_UI_WIDTH - 1);
+  if (ui_y) *ui_y = clamp_int(y, 0, PET_P4_UI_HEIGHT - 1);
+#else
   if (ui_x) *ui_x = panel_y;
   if (ui_y) *ui_y = PET_P4_PANEL_WIDTH - 1 - panel_x;
+#endif
 }
 
 const char *pet_p4_touch_gesture_name(pet_p4_touch_gesture_t gesture) {

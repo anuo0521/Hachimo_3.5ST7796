@@ -22,8 +22,15 @@
 /* LCD display color space */
 #define BSP_LCD_COLOR_SPACE         (ESP_LCD_COLOR_SPACE_RGB)
 
+#if CONFIG_PET_P4_PANEL_ST7796_SPI
+/* The replacement panel is a 320x480 portrait ST7796 module. The driver sets
+ * MADCTL MV, so the addressable GRAM window is 480x320 in landscape. */
+#define BSP_LCD_H_RES              (480)
+#define BSP_LCD_V_RES              (320)
+#else
 #define BSP_LCD_H_RES              (480)
 #define BSP_LCD_V_RES              (640)
+#endif
 
 #define BSP_LCD_MIPI_DSI_LANE_BITRATE_MBPS (800)
 #define BSP_LCD_MIPI_DSI_LANE_NUM          (1)    // WLK2802MIPI-15P/ST7701S uses 1 data lane
