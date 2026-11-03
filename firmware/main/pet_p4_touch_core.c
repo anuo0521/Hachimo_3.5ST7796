@@ -1,4 +1,5 @@
 #include "pet_p4_touch_core.h"
+#include "pet_p4_panel_geometry.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -21,9 +22,9 @@
 #define PET_P4_PANEL_HEIGHT 480
 #define PET_P4_PANEL_LANDSCAPE_WIDTH 480
 #define PET_P4_PANEL_LANDSCAPE_HEIGHT 320
-/* The renderer fits the 640x480 UI into 424x320 and letterboxes 28 px each side. */
-#define PET_P4_UI_SCALED_WIDTH 424
-#define PET_P4_UI_SCALE_ORIGIN_X 28
+/* The renderer letterboxes the 640x480 UI; PET_P4_PANEL_FIT_WIDTH and
+ * PET_P4_PANEL_FIT_OFFSET_X come from pet_p4_panel_geometry.h so the mapping
+ * below can never drift from the drawing path. */
 #else
 #define PET_P4_PANEL_WIDTH 480
 #define PET_P4_PANEL_HEIGHT 640
@@ -144,7 +145,7 @@ void pet_p4_touch_panel_to_ui(int panel_x, int panel_y, int *ui_x, int *ui_y) {
 #if CONFIG_PET_P4_TOUCH_MIRROR_Y
   landscape_y = PET_P4_PANEL_LANDSCAPE_HEIGHT - 1 - landscape_y;
 #endif
-  int x = (landscape_x - PET_P4_UI_SCALE_ORIGIN_X) * PET_P4_UI_WIDTH / PET_P4_UI_SCALED_WIDTH;
+  int x = (landscape_x - PET_P4_PANEL_FIT_OFFSET_X) * PET_P4_UI_WIDTH / PET_P4_PANEL_FIT_WIDTH;
   int y = landscape_y * PET_P4_UI_HEIGHT / PET_P4_PANEL_LANDSCAPE_HEIGHT;
   if (ui_x) *ui_x = clamp_int(x, 0, PET_P4_UI_WIDTH - 1);
   if (ui_y) *ui_y = clamp_int(y, 0, PET_P4_UI_HEIGHT - 1);

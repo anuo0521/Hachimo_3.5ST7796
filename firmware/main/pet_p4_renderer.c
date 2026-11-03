@@ -14,6 +14,7 @@
 
 #include "pet_p4_renderer.h"
 #include "pet_p4_frame_gate.h"
+#include "pet_p4_panel_geometry.h"
 
 #include <limits.h>
 #include <math.h>
@@ -5003,10 +5004,10 @@ static void draw_boot_diagnostic(unsigned long long now_ms) {
 
 #if CONFIG_PET_P4_PANEL_ST7796_SPI
 /* The replacement ST7796 panel is 480x320 in landscape. The UI stays authored at
- * 640x480, so each frame is uniformly scaled to 424x320 and centred, leaving a
- * 28 px black pillar on either side instead of squeezing the pet horizontally. */
-#define PET_P4_PANEL_FIT_WIDTH 424
-#define PET_P4_PANEL_FIT_OFFSET_X 28
+ * 640x480, so each frame is uniformly scaled to PET_P4_PANEL_FIT_WIDTH and
+ * centred, leaving a black pillar on either side instead of squeezing the pet
+ * horizontally. The fit lives in pet_p4_panel_geometry.h because the touch
+ * mapper has to invert exactly the same transform. */
 
 static esp_err_t rotate_landscape_to_panel(void) {
   if (!g_framebuffer || !g_native_framebuffer) return ESP_ERR_INVALID_STATE;
