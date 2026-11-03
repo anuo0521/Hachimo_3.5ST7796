@@ -5002,7 +5002,7 @@ static void draw_boot_diagnostic(unsigned long long now_ms) {
   fill_rect(PET_P4_UI_WIDTH - marker_w - 16, PET_P4_UI_HEIGHT - marker_h - 16, marker_w, marker_h, orange);
 }
 
-#if CONFIG_PET_P4_PANEL_ST7796_SPI
+#if PET_P4_PANEL_ST7796
 /* The replacement ST7796 panel is 480x320 in landscape. The UI stays authored at
  * 640x480, so each frame is uniformly scaled to PET_P4_PANEL_FIT_WIDTH and
  * centred, leaving a black pillar on either side instead of squeezing the pet

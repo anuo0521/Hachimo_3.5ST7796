@@ -21,6 +21,7 @@
 #include "pet_p4_assets.h"
 #include "pet_p4_miniapp.h"
 #include "pet_p4_center_layout.h"
+#include "pet_p4_panel.h"
 #include "pet_p4_touch_core.h"
 
 #define PET_P4_TOUCH_SAMPLE_MS 15
@@ -40,7 +41,7 @@ static bool g_ready;
 static const char *g_init_stage = "not_started";
 static esp_err_t g_init_error, g_primary_error, g_backup_error;
 
-#if CONFIG_PET_P4_PANEL_ST7796_SPI
+#if PET_P4_PANEL_ST7796
 /* The ST7796 adapter board carries an FT6336U on its own I2C pair, which is not
  * the Waveshare BSP bus. Own the bus here so touch and diagnostics agree. */
 static i2c_master_bus_handle_t g_touch_i2c_bus;
@@ -235,7 +236,7 @@ esp_err_t pet_p4_touch_init(void) {
   g_address = 0;
   g_cst826 = g_ft6336 = false;
   g_init_stage = "i2c_init";
-#if CONFIG_PET_P4_PANEL_ST7796_SPI
+#if PET_P4_PANEL_ST7796
   i2c_master_bus_handle_t i2c_bus = NULL;
   esp_err_t err = touch_i2c_bus_get(&i2c_bus);
   if (err != ESP_OK) { g_init_error = err; return err; }
@@ -250,7 +251,7 @@ esp_err_t pet_p4_touch_init(void) {
   esp_lcd_panel_io_i2c_config_t io_config = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
   g_init_stage = "probe";
   g_primary_error = g_backup_error = ESP_ERR_NOT_FOUND;
-#if !CONFIG_PET_P4_PANEL_ST7796_SPI
+#if !PET_P4_PANEL_ST7796
   /* Allow controller power-up, bounded to under one second. No shared bus
    * reset and no speculative GPIO drive: the installed panel must be verified. */
   for (unsigned attempt = 0; attempt < 4 && !g_address; attempt++) {
@@ -272,7 +273,7 @@ esp_err_t pet_p4_touch_init(void) {
     g_probe_18 = i2c_master_probe(i2c_bus, 0x18, 50);
     g_init_error = (g_primary_error == ESP_ERR_TIMEOUT || g_backup_error == ESP_ERR_TIMEOUT)
       ? ESP_ERR_TIMEOUT : ESP_ERR_NOT_FOUND;
-#if CONFIG_PET_P4_PANEL_ST7796_SPI
+#if PET_P4_PANEL_ST7796
     ESP_LOGW(TAG, "touch probe failed SDA=%d SCL=%d 0x38=%s 0x15=%s; reset not driven",
       CONFIG_PET_P4_TOUCH_I2C_SDA, CONFIG_PET_P4_TOUCH_I2C_SCL,
       esp_err_to_name(g_probe_38), esp_err_to_name(g_probe_15));
@@ -597,7 +598,7 @@ int pet_p4_touch_i2c_scan(char *buffer, size_t buffer_size) {
   if (!buffer || buffer_size == 0) return 0;
   buffer[0] = '\0';
 
-#if CONFIG_PET_P4_PANEL_ST7796_SPI
+#if PET_P4_PANEL_ST7796
   i2c_master_bus_handle_t bus = NULL;
   esp_err_t init_err = touch_i2c_bus_get(&bus);
 #else

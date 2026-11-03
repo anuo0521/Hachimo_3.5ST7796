@@ -7,18 +7,47 @@ menu "PET P4 hardware"
 
     choice PET_P4_PANEL
         prompt "Installed LCD panel"
-        default PET_P4_PANEL_ST7796_SPI
+        default PET_P4_PANEL_ST7796_I80
         help
             Selects which panel the firmware drives. The original Waveshare 4.3"
             ST7701 module went end of life; the replacement is the 鸿讯电子
             CL35BC1017-40A 3.5" ST7796 module wired through the adapter board.
+
+            The 8080 parallel option is the recommended build: 8 data lines move
+            a full frame in ~8 ms instead of ~62 ms over SPI, and the LCD_CAM
+            peripheral swaps the RGB565 byte order in hardware so the frame
+            buffer can be streamed straight out of PSRAM.
 
         config PET_P4_PANEL_WAVESHARE_ST7701_DSI
             bool "Waveshare 4.3\" ST7701 (MIPI DSI, 480x640)"
 
         config PET_P4_PANEL_ST7796_SPI
             bool "CL35BC1017-40A ST7796 (4-wire SPI, 320x480)"
+
+        config PET_P4_PANEL_ST7796_I80
+            bool "CL35BC1017-40A ST7796 (8080 8-bit parallel, 320x480)"
     endchoice
+
+    if PET_P4_PANEL_ST7796_SPI || PET_P4_PANEL_ST7796_I80
+
+        menu "ST7796 panel orientation"
+
+            config PET_P4_LCD_MIRROR_X
+                bool "Mirror the panel horizontally"
+                default n
+                help
+                    Flips MADCTL MX. Use it when the image appears left-right
+                    reversed after mounting the module in its enclosure.
+
+            config PET_P4_LCD_MIRROR_Y
+                bool "Mirror the panel vertically"
+                default n
+                help
+                    Flips MADCTL MY. MX+MY together rotate the image by 180
+                    degrees without touching the software scaler.
+        endmenu
+
+    endif
 
     if PET_P4_PANEL_ST7796_SPI
 
@@ -76,21 +105,109 @@ menu "PET P4 hardware"
                 int "SPI transaction queue depth"
                 default 2
                 range 1 8
-
-            config PET_P4_LCD_MIRROR_X
-                bool "Mirror the panel horizontally"
-                default n
-                help
-                    Flips MADCTL MX. Use it when the image appears left-right
-                    reversed after mounting the module in its enclosure.
-
-            config PET_P4_LCD_MIRROR_Y
-                bool "Mirror the panel vertically"
-                default n
-                help
-                    Flips MADCTL MY. MX+MY together rotate the image by 180
-                    degrees without touching the software scaler.
         endmenu
+
+    endif
+
+    if PET_P4_PANEL_ST7796_I80
+
+        menu "ST7796 8080 parallel wiring"
+
+            config PET_P4_LCD_I80_PIN_D0
+                int "DB0 GPIO"
+                default 33
+                range -1 54
+
+            config PET_P4_LCD_I80_PIN_D1
+                int "DB1 GPIO"
+                default 34
+                range -1 54
+
+            config PET_P4_LCD_I80_PIN_D2
+                int "DB2 GPIO"
+                default 35
+                range -1 54
+
+            config PET_P4_LCD_I80_PIN_D3
+                int "DB3 GPIO"
+                default 36
+                range -1 54
+
+            config PET_P4_LCD_I80_PIN_D4
+                int "DB4 GPIO"
+                default 37
+                range -1 54
+
+            config PET_P4_LCD_I80_PIN_D5
+                int "DB5 GPIO"
+                default 38
+                range -1 54
+
+            config PET_P4_LCD_I80_PIN_D6
+                int "DB6 GPIO"
+                default 39
+                range -1 54
+
+            config PET_P4_LCD_I80_PIN_D7
+                int "DB7 GPIO"
+                default 40
+                range -1 54
+
+            config PET_P4_LCD_I80_PIN_WR
+                int "WR (write strobe) GPIO"
+                default 41
+                range -1 54
+                help
+                    Drives the panel's WR pin. The LCD_CAM peripheral toggles it
+                    once per byte, so keep this trace short and away from the
+                    data bus.
+
+            config PET_P4_LCD_I80_PIN_RS
+                int "RS (D/C) GPIO"
+                default 42
+                range -1 54
+                help
+                    The panel calls this pin RS; it carries the same role as the
+                    SPI build's D/C pin.
+
+            config PET_P4_LCD_I80_PIN_CS
+                int "CS GPIO"
+                default 43
+                range -1 54
+
+            config PET_P4_LCD_I80_PIN_RST
+                int "RESET GPIO (-1 when tied to board reset)"
+                default 44
+                range -1 54
+
+            config PET_P4_LCD_I80_PIN_BACKLIGHT
+                int "Backlight GPIO (-1 when the module has no BL control)"
+                default 26
+                range -1 54
+
+            config PET_P4_LCD_I80_PCLK_HZ
+                int "WR clock (Hz)"
+                default 40000000
+                range 1000000 80000000
+                help
+                    40 MHz moves a full 480x320 frame in ~8 ms, which already
+                    outruns the panel's own 60 Hz refresh. The upper bound is the
+                    LCD_CAM source clock (PLL_160M / 2 = 80 MHz); the ST7796 write
+                    cycle, not the P4, is what actually limits you here.
+
+            config PET_P4_LCD_I80_QUEUE_DEPTH
+                int "Transaction queue depth"
+                default 10
+                range 1 32
+                help
+                    Deeper queues let the DMA link stay busy across band
+                    boundaries. The SPI build only needs 2 because each
+                    transaction has to finish before the buffer is refilled.
+        endmenu
+
+    endif
+
+    if PET_P4_PANEL_ST7796_SPI || PET_P4_PANEL_ST7796_I80
 
         menu "FT6336 capacitive touch"
 

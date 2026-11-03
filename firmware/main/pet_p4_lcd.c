@@ -1,12 +1,14 @@
 /*
- * [Input] Panel driver operations (ST7796 over 4-wire SPI or the Waveshare DSI
- *         BSP), boot lifecycle, and RGB565 pixels.
+ * [Input] Panel driver operations (ST7796 over 4-wire SPI or 8080 8-bit
+ *         parallel, or the Waveshare DSI BSP), boot lifecycle, and RGB565
+ *         pixels.
  * [Output] Backlight-gated LCD initialization, first-frame reveal, and draws.
  * [Pos] ESP32-P4 LCD hardware boundary.
  * [Sync] If this file changes, update `firmware/.folder.md`.
  */
 
 #include "pet_p4_lcd.h"
+#include "pet_p4_panel.h"
 
 #include <stdio.h>
 #include <stdint.h>
@@ -30,6 +32,10 @@
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_st7796.h"
 #include "driver/spi_master.h"
+#elif CONFIG_PET_P4_PANEL_ST7796_I80
+#include "esp_lcd_io_i80.h"
+#include "esp_lcd_panel_io.h"
+#include "esp_lcd_st7796.h"
 #else
 #include "esp_lcd_mipi_dsi.h"
 #include "driver/i2c_master.h"
@@ -47,6 +53,8 @@ static const TickType_t LCD_REFRESH_WAIT_TICKS = pdMS_TO_TICKS(250);
  * staging buffer inside internal DMA-capable RAM (15 KiB) while still moving a
  * whole frame in 20 transactions. */
 #define PET_P4_LCD_BAND_ROWS 16
+#elif CONFIG_PET_P4_PANEL_ST7796_I80
+#define PET_P4_LCD_BACKLIGHT_GPIO (CONFIG_PET_P4_LCD_I80_PIN_BACKLIGHT)
 #else
 #define PET_P4_LCD_BACKLIGHT_GPIO (BSP_LCD_BACKLIGHT)
 #endif
@@ -57,7 +65,7 @@ static SemaphoreHandle_t g_refresh_done_sem;
 static esp_err_t g_backlight_status = ESP_ERR_INVALID_STATE;
 static bool g_backlight_revealed;
 static bool g_forced_backlight_logged;
-#if !CONFIG_PET_P4_PANEL_ST7796_SPI
+#if !PET_P4_PANEL_ST7796
 static bool g_refresh_callback_logged;
 #endif
 static uint16_t *g_test_row_buffer;
@@ -95,7 +103,7 @@ esp_err_t pet_p4_lcd_prepare_boot(void) {
   return g_backlight_status;
 }
 
-#if CONFIG_PET_P4_PANEL_ST7796_SPI
+#if PET_P4_PANEL_ST7796
 
 static bool IRAM_ATTR lcd_color_trans_done(
   esp_lcd_panel_io_handle_t panel_io,
@@ -109,6 +117,7 @@ static bool IRAM_ATTR lcd_color_trans_done(
   return task_awake == pdTRUE;
 }
 
+#if CONFIG_PET_P4_PANEL_ST7796_SPI
 /* The ST7796 expects the high byte of every RGB565 sample first on the SPI data
  * phase, while every pixel producer in this firmware stores native little-endian
  * halfwords. Staging in bands keeps the swap off the render path's heap. */
@@ -222,13 +231,135 @@ static esp_err_t st7796_panel_bring_up(void) {
   return ESP_OK;
 }
 
+#else  // 8080 8-bit parallel
+
+/* The byte order problem is the same one the SPI path solves with a staging
+ * buffer, but LCD_CAM can swizzle adjacent bytes while the DMA reads them (see
+ * lcd_ll_enable_swizzle). With swap_color_bytes set below, the frame buffer is
+ * streamed straight out of PSRAM: no intermediate copy, no internal RAM held
+ * hostage, and the render task gets its CPU time back. */
+static esp_err_t st7796_draw_rgb565(int x, int y, int width, int height, const uint16_t *pixels) {
+  if (!g_panel_handle) return ESP_ERR_INVALID_STATE;
+  if (!pixels || width <= 0 || height <= 0) return ESP_ERR_INVALID_ARG;
+
+  if (g_refresh_done_sem) {
+    while (xSemaphoreTake(g_refresh_done_sem, 0) == pdTRUE) {
+    }
+  }
+  esp_err_t err = esp_lcd_panel_draw_bitmap(g_panel_handle, x, y, x + width, y + height, pixels);
+  if (err != ESP_OK) return err;
+  if (g_refresh_done_sem && xSemaphoreTake(g_refresh_done_sem, LCD_REFRESH_WAIT_TICKS) != pdTRUE) {
+    ESP_LOGW(TAG, "LCD refresh wait timed out");
+    return ESP_ERR_TIMEOUT;
+  }
+  return ESP_OK;
+}
+
+static esp_lcd_i80_bus_handle_t g_i80_bus;
+
+static esp_err_t st7796_panel_bring_up(void) {
+  esp_lcd_i80_bus_config_t bus_config = {
+    .dc_gpio_num = CONFIG_PET_P4_LCD_I80_PIN_RS,
+    .wr_gpio_num = CONFIG_PET_P4_LCD_I80_PIN_WR,
+    .clk_src = LCD_CLK_SRC_DEFAULT,
+    .data_gpio_nums = {
+      CONFIG_PET_P4_LCD_I80_PIN_D0,
+      CONFIG_PET_P4_LCD_I80_PIN_D1,
+      CONFIG_PET_P4_LCD_I80_PIN_D2,
+      CONFIG_PET_P4_LCD_I80_PIN_D3,
+      CONFIG_PET_P4_LCD_I80_PIN_D4,
+      CONFIG_PET_P4_LCD_I80_PIN_D5,
+      CONFIG_PET_P4_LCD_I80_PIN_D6,
+      CONFIG_PET_P4_LCD_I80_PIN_D7,
+      /* The driver indexes this array by bus_width, but leaving the tail
+       * uninitialised would put GPIO0 in there if the bus is ever widened. */
+      -1, -1, -1, -1, -1, -1, -1, -1
+    },
+    .bus_width = 8,
+    .max_transfer_bytes = (size_t) BSP_LCD_H_RES * (size_t) BSP_LCD_V_RES * sizeof(uint16_t) + 64,
+    .dma_burst_size = 64,
+  };
+  ESP_RETURN_ON_ERROR(esp_lcd_new_i80_bus(&bus_config, &g_i80_bus), TAG, "create i80 bus");
+
+  esp_lcd_panel_io_i80_config_t io_config = {
+    .cs_gpio_num = CONFIG_PET_P4_LCD_I80_PIN_CS,
+    .pclk_hz = CONFIG_PET_P4_LCD_I80_PCLK_HZ,
+    .trans_queue_depth = CONFIG_PET_P4_LCD_I80_QUEUE_DEPTH,
+    .on_color_trans_done = lcd_color_trans_done,
+    .user_ctx = g_refresh_done_sem,
+    .lcd_cmd_bits = 8,
+    .lcd_param_bits = 8,
+    .dc_levels = {
+      .dc_idle_level = 0,
+      .dc_cmd_level = 0,
+      .dc_dummy_level = 0,
+      .dc_data_level = 1,
+    },
+    .flags = {
+      .cs_active_high = 0,
+      .reverse_color_bits = 0,
+      /* Native little-endian halfwords in RAM become high-byte-first on the
+       * bus without touching the source buffer. */
+      .swap_color_bytes = 1,
+      /* ST7796 latches DB[7:0] on the WR rising edge, so WR idles low and the
+       * PCLK is active high. If a scope shows data being taken on the wrong
+       * edge, flip these two together. */
+      .pclk_active_neg = 0,
+      .pclk_idle_low = 1,
+    },
+  };
+  ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i80(g_i80_bus, &io_config, &g_lcd_io), TAG, "create i80 panel IO");
+
+  esp_lcd_panel_dev_config_t panel_config = {
+    .reset_gpio_num = CONFIG_PET_P4_LCD_I80_PIN_RST,
+    .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR,
+    .bits_per_pixel = 16,
+  };
+  ESP_RETURN_ON_ERROR(esp_lcd_new_panel_st7796(g_lcd_io, &panel_config, &g_panel_handle), TAG, "create ST7796 panel");
+  ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(g_panel_handle), TAG, "reset ST7796");
+  ESP_RETURN_ON_ERROR(esp_lcd_panel_init(g_panel_handle), TAG, "init ST7796");
+#if CONFIG_PET_P4_LCD_MIRROR_X || CONFIG_PET_P4_LCD_MIRROR_Y
+  ESP_RETURN_ON_ERROR(
+    esp_lcd_panel_mirror(g_panel_handle, CONFIG_PET_P4_LCD_MIRROR_X, CONFIG_PET_P4_LCD_MIRROR_Y),
+    TAG,
+    "mirror ST7796"
+  );
+#endif
+  ESP_LOGI(
+    TAG,
+    "ST7796 ready %dx%d i80-8bit D0..D7=%d/%d/%d/%d/%d/%d/%d/%d wr=%d rs=%d cs=%d rst=%d pclk=%dHz",
+    BSP_LCD_H_RES,
+    BSP_LCD_V_RES,
+    CONFIG_PET_P4_LCD_I80_PIN_D0,
+    CONFIG_PET_P4_LCD_I80_PIN_D1,
+    CONFIG_PET_P4_LCD_I80_PIN_D2,
+    CONFIG_PET_P4_LCD_I80_PIN_D3,
+    CONFIG_PET_P4_LCD_I80_PIN_D4,
+    CONFIG_PET_P4_LCD_I80_PIN_D5,
+    CONFIG_PET_P4_LCD_I80_PIN_D6,
+    CONFIG_PET_P4_LCD_I80_PIN_D7,
+    CONFIG_PET_P4_LCD_I80_PIN_WR,
+    CONFIG_PET_P4_LCD_I80_PIN_RS,
+    CONFIG_PET_P4_LCD_I80_PIN_CS,
+    CONFIG_PET_P4_LCD_I80_PIN_RST,
+    CONFIG_PET_P4_LCD_I80_PCLK_HZ
+  );
+  return ESP_OK;
+}
+
+#endif  // CONFIG_PET_P4_PANEL_ST7796_SPI
+
 esp_err_t pet_p4_lcd_init(void) {
   if (g_panel_handle) return ESP_OK;
   if (!g_refresh_done_sem) {
     g_refresh_done_sem = xSemaphoreCreateBinary();
     if (!g_refresh_done_sem) return ESP_ERR_NO_MEM;
   }
-  ESP_LOGI(TAG, "Initialize CL35BC1017-40A ST7796 SPI panel");
+#if CONFIG_PET_P4_PANEL_ST7796_SPI
+  ESP_LOGI(TAG, "Initialize CL35BC1017-40A ST7796 4-wire SPI panel");
+#else
+  ESP_LOGI(TAG, "Initialize CL35BC1017-40A ST7796 8080 8-bit panel");
+#endif
   ESP_RETURN_ON_ERROR(st7796_panel_bring_up(), TAG, "bring up ST7796");
 
   /* Clear GRAM so the controller's power-on pattern is never shown. The
@@ -309,12 +440,12 @@ esp_err_t pet_p4_lcd_init(void) {
   return ESP_OK;
 }
 
-#endif  // CONFIG_PET_P4_PANEL_ST7796_SPI
+#endif  // PET_P4_PANEL_ST7796
 
 esp_err_t pet_p4_lcd_reveal(void) {
   if (!g_panel_handle) return ESP_ERR_INVALID_STATE;
   if (g_backlight_revealed) return g_backlight_status;
-#if CONFIG_PET_P4_PANEL_ST7796_SPI
+#if PET_P4_PANEL_ST7796
   g_backlight_status = ESP_OK;
 #else
   g_backlight_status = bsp_display_backlight_on();
@@ -343,7 +474,7 @@ esp_err_t pet_p4_lcd_keep_awake(void) {
 
 esp_err_t pet_p4_lcd_show_color_bar(void) {
   if (!g_panel_handle) return ESP_ERR_INVALID_STATE;
-#if CONFIG_PET_P4_PANEL_ST7796_SPI
+#if PET_P4_PANEL_ST7796
   /* The ST7796 has no DPI test-pattern generator; the software pattern below
    * is the equivalent diagnostic. */
   ESP_LOGW(TAG, "ST7796 has no hardware color bar; use the software pattern");
@@ -413,7 +544,7 @@ esp_err_t pet_p4_lcd_show_software_test_pattern(uint32_t phase) {
 }
 
 esp_err_t pet_p4_lcd_draw_rgb565(int x, int y, int width, int height, const uint16_t *pixels) {
-#if CONFIG_PET_P4_PANEL_ST7796_SPI
+#if PET_P4_PANEL_ST7796
   return st7796_draw_rgb565(x, y, width, height, pixels);
 #else
   if (!g_panel_handle) return ESP_ERR_INVALID_STATE;
@@ -434,7 +565,7 @@ esp_err_t pet_p4_lcd_draw_rgb565(int x, int y, int width, int height, const uint
 }
 
 int pet_p4_lcd_scan_i2c(char *buffer, size_t buffer_size) {
-#if CONFIG_PET_P4_PANEL_ST7796_SPI
+#if PET_P4_PANEL_ST7796
   return pet_p4_touch_i2c_scan(buffer, buffer_size);
 #else
   if (!buffer || buffer_size == 0) return 0;

@@ -16,7 +16,7 @@
 #define PET_P4_UI_WIDTH 640
 #define PET_P4_UI_HEIGHT 480
 
-#if CONFIG_PET_P4_PANEL_ST7796_SPI
+#if PET_P4_PANEL_ST7796
 /* CL35BC1017-40A: 320x480 glass, addressed in landscape (MADCTL MV). */
 #define PET_P4_PANEL_WIDTH 320
 #define PET_P4_PANEL_HEIGHT 480
@@ -134,7 +134,7 @@ bool pet_p4_touch_decoder_update(
 void pet_p4_touch_panel_to_ui(int panel_x, int panel_y, int *ui_x, int *ui_y) {
   panel_x = clamp_int(panel_x, 0, PET_P4_PANEL_WIDTH - 1);
   panel_y = clamp_int(panel_y, 0, PET_P4_PANEL_HEIGHT - 1);
-#if CONFIG_PET_P4_PANEL_ST7796_SPI
+#if PET_P4_PANEL_ST7796
   /* The controller reports the glass in its native portrait axes; the LCD is
    * addressed in landscape, so landscape X comes from the controller's Y. */
   int landscape_x = panel_y;

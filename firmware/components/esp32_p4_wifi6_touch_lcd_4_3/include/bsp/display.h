@@ -22,9 +22,10 @@
 /* LCD display color space */
 #define BSP_LCD_COLOR_SPACE         (ESP_LCD_COLOR_SPACE_RGB)
 
-#if CONFIG_PET_P4_PANEL_ST7796_SPI
+#if CONFIG_PET_P4_PANEL_ST7796_SPI || CONFIG_PET_P4_PANEL_ST7796_I80
 /* The replacement panel is a 320x480 portrait ST7796 module. The driver sets
- * MADCTL MV, so the addressable GRAM window is 480x320 in landscape. */
+ * MADCTL MV, so the addressable GRAM window is 480x320 in landscape. Both the
+ * SPI and the 8080 parallel transport drive the same glass. */
 #define BSP_LCD_H_RES              (480)
 #define BSP_LCD_V_RES              (320)
 #else

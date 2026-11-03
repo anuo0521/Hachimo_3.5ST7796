@@ -61,8 +61,16 @@ node pc/scripts/package-factory-release.mjs \
 ## 更换屏幕：3.5 寸 ST7796 / Replacement 3.5" panel
 
 原配微雪 4.3 寸 ST7701（MIPI DSI，480x640）已停产。替换屏为鸿讯电子
-**CL35BC1017-40A**（ST7796S，4 线 SPI，320x480 玻璃，FT6336U 电容触摸）。
-`main/Kconfig.projbuild` 里新增 `PET P4 hardware` 菜单，默认已选中 ST7796：
+**CL35BC1017-40A**（ST7796S，320x480 玻璃，FT6336U 电容触摸）。
+
+默认走 **8080 8 位并口**（LCD_CAM i80）。选它不是因为并口更"正宗"，而是
+带宽差 8 倍：SPI 40 MHz 推满一帧 480x320 RGB565 要 62 ms，8 位并口只要约
+8 ms，而屏自身的刷新率才 60 Hz。更重要的是 LCD_CAM 有硬件字节交换
+（`flags.swap_color_bytes`，见 `lcd_ll_enable_swizzle`），RGB565 从 PSRAM
+直接 DMA 出去即可，SPI 分支那套 16 行中转缓冲和逐像素 swap 全部省掉。
+
+`main/Kconfig.projbuild` 的 `PET P4 hardware` 菜单里三选一：DSI 原屏、
+ST7796 SPI、ST7796 8080 并口（默认）。
 
 ```sh
 cd firmware
@@ -70,27 +78,96 @@ idf.py menuconfig     # PET P4 hardware -> Installed LCD panel
 idf.py build
 ```
 
-默认接线（全部可在 menuconfig 改，改完重新 build 即可）：
+### LCD 40PIN FPC 接线
 
-| 信号 | 默认 GPIO | 配置项 |
+| 脚 | 信号 | 接到 | 说明 |
+| --- | --- | --- | --- |
+| 1–4 | XL / YU / XR / YD | 不接 | 电阻触摸的电极脚。本屏是电容触摸，这四脚空置 |
+| 5 | GND | GND | |
+| 6 | IOVCC | 3.3 V | I/O 电源，1.65–3.3 V |
+| 7 | VCC | 3.3 V | 模拟电源，2.5–3.3 V |
+| 8 | FMARK | 可不接 | TE 撕裂信号，当前固件不使用 |
+| 9 | CS | **GPIO43** | `PET_P4_LCD_I80_PIN_CS` |
+| 10 | RS | **GPIO42** | 命令/数据选择，等同 SPI 版的 D/C |
+| 11 | WR | **GPIO41** | 写选通，每个字节翻转一次 |
+| 12 | RD | 3.3 V | 只写不读，固定为无效电平 |
+| 13 | SDA | 不接 | SPI 模式的串行数据，并口模式不用 |
+| 14 | SDO | 不接 | 同上 |
+| 15 | RESET | **GPIO44** | 接板级复位时可把配置项设为 -1 |
+| 16 | GND | GND | |
+| 17–24 | DB0–DB7 | **GPIO33–GPIO40** | 依次对应，8 根连续走线 |
+| 25–32 | DB8–DB15 | 不接 | 8 位模式只用低 8 位 |
+| 33 | LEDA | 背光正极 | 见下方背光电路 |
+| 34–36 | LEDK | 背光负极 | 三脚并接 |
+| 37 | GND | GND | |
+| 38 | IM0 | **3.3 V** | 必须为 1 |
+| 39 | IM1 | **3.3 V** | 必须为 1 |
+| 40 | IM2 | **GND** | 必须为 0 |
+
+**IM0/IM1/IM2 接错屏就完全不响应**，而且现象和"背光没亮""初始化失败"一模一样，
+排查时会绕很远。规格书里的对应关系：
+
+| IM0 | IM1 | IM2 | 模式 |
+| --- | --- | --- | --- |
+| 0 | 1 | 0 | 80-16bit 并口 |
+| 1 | 1 | 0 | **80-8bit 并口（本项目）** |
+| 1 | 0 | 1 | 3 线 SPI |
+| 1 | 1 | 1 | 4 线 SPI |
+
+### CTP 6PIN FPC 接线
+
+触摸是**独立的一根 6 针排线**，不在那 40 针里面。
+
+| 脚 | 信号 | 接到 | 说明 |
+| --- | --- | --- | --- |
+| 1 | VCC | 3.3 V | |
+| 2 | SDA | **GPIO7** | `PET_P4_TOUCH_I2C_SDA`，FT6336U 地址 0x38 |
+| 3 | SCL | **GPIO8** | `PET_P4_TOUCH_I2C_SCL`，规格 100 kHz |
+| 4 | INT | 可不接 | 固件按 15 ms 轮询，不依赖中断；建议留测试点 |
+| 5 | RST | 3.3 V | 低有效。接 3.3 V 即保持释放；想留硬复位手段就改接一个 GPIO |
+| 6 | GND | GND | |
+
+### 背光电路
+
+规格书 2.3 节：VLED 正向压降 2.9–3.3 V（典型 3.1 V），电流 120–150 mA，
+所以 **3.3 V 直驱，不需要升压**。Vf 的离散性会让直接硬接的电流飘得厉害，
+务必串限流电阻，取值 1–2 Ω（按 3.3 V − 3.1 V ÷ 0.15 A ≈ 1.3 Ω 起算）。
+
+要 PWM 调光时：LEDA 接 3.3 V，三个 LEDK 并接后接 NMOS 漏极，源极接地，
+栅极接 **GPIO26**（`PET_P4_LCD_I80_PIN_BACKLIGHT`），PWM 频率放在 2 kHz 以上避免可见闪烁。
+
+150 mA 对板上的 3.3 V LDO 不算小，背光单独一路供电、加 10 µF 去耦，别和
+P4 的 I/O 电源挤同一个走线。
+
+### 配置项一览
+
+| 配置项 | 默认 | 说明 |
 | --- | --- | --- |
-| SCLK | 20 | `PET_P4_LCD_PIN_SCLK` |
-| MOSI (SDA) | 21 | `PET_P4_LCD_PIN_MOSI` |
-| CS | 22 | `PET_P4_LCD_PIN_CS` |
-| D/C (RS) | 23 | `PET_P4_LCD_PIN_DC` |
-| RESET | 51 | `PET_P4_LCD_PIN_RST`（接板级复位时设 -1） |
-| 背光 BL | 26 | `PET_P4_LCD_PIN_BACKLIGHT` |
-| CTP SDA | 7 | `PET_P4_TOUCH_I2C_SDA` |
-| CTP SCL | 8 | `PET_P4_TOUCH_I2C_SCL` |
+| `PET_P4_LCD_I80_PIN_D0`..`D7` | 33..40 | 数据总线 |
+| `PET_P4_LCD_I80_PIN_WR` | 41 | 写选通 |
+| `PET_P4_LCD_I80_PIN_RS` | 42 | 命令/数据 |
+| `PET_P4_LCD_I80_PIN_CS` | 43 | 片选 |
+| `PET_P4_LCD_I80_PIN_RST` | 44 | 复位 |
+| `PET_P4_LCD_I80_PIN_BACKLIGHT` | 26 | 背光 PWM |
+| `PET_P4_LCD_I80_PCLK_HZ` | 40000000 | WR 时钟，上限是 LCD_CAM 的 80 MHz |
+| `PET_P4_LCD_I80_QUEUE_DEPTH` | 10 | 事务队列深度 |
+| `PET_P4_TOUCH_I2C_SDA` / `SCL` | 7 / 8 | CTP |
+| `PET_P4_TOUCH_I2C_HZ` | 100000 | FT6336U 规格值 |
 
-- SPI 时钟默认 40 MHz（`PET_P4_LCD_SPI_CLOCK_HZ`）。ST7796S 手册的串行写周期只保证到 15 MHz，
-  40 MHz 在短线转接板上普遍可用；出现花屏先降到 20 MHz 再排查。
+### 排障与其它
+
+- 花屏或颜色反：先看 `swap_color_bytes`。字节序反了会呈现"红蓝互换 + 明暗错位"，
+  和单纯的 RGB/BGR 互换不同；后者改 `rgb_ele_order`。
+- 数据和时钟沿对不上时，把 `pclk_active_neg` 和 `pclk_idle_low` 两个标志**成对**翻转。
+  ST7796 在 WR 上升沿锁存数据，当前配置是低电平空闲 + 上升沿有效。
+- 画面上下/左右翻：`PET_P4_LCD_MIRROR_X` / `PET_P4_LCD_MIRROR_Y`。
+  触摸方向相反时改 `PET_P4_TOUCH_MIRROR_X` / `PET_P4_TOUCH_MIRROR_Y`（两组互相独立）。
 - 屏幕在驱动里按横屏（MADCTL MV）寻址，即 480x320。UI 仍是 640x480，渲染时等比缩到
   424x320 居中，左右各留 28 px 黑边；不想留黑边就得重排 UI，见
   `pet_p4_renderer.c` 的 `PET_P4_PANEL_FIT_*`。
-- 画面上下/左右翻：`PET_P4_LCD_MIRROR_X` / `PET_P4_LCD_MIRROR_Y`。
-  触摸方向相反时改 `PET_P4_TOUCH_MIRROR_X` / `PET_P4_TOUCH_MIRROR_Y`（两组互相独立）。
 - 触摸沿用工程里既有的 FT6336U 寄存器路径（0x38，寄存器 0x02），不需要 GT911 组件。
+- 手头已有旧 SPI 转接板时：menuconfig 选 `CL35BC1017-40A ST7796 (4-wire SPI)`，
+  引脚表在 `sdkconfig.spi-backup` 对应的那一组配置项里。
 - 回到原微雪屏：menuconfig 里选 `Waveshare 4.3" ST7701`，BSP 路径原样保留。
 
 ## 注意 / Caution
