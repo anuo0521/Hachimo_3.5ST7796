@@ -36,6 +36,7 @@ bundle-secrets.env
 .codex/
 .dev-logs/
 .tooling/
+firmware/sdkconfig
 firmware/sdkconfig.*
 !firmware/sdkconfig.defaults
 !firmware/sdkconfig.v3.defaults

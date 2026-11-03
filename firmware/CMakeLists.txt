@@ -5,6 +5,12 @@
 
 cmake_minimum_required(VERSION 3.16)
 
+# Native `idf.py` builds must reproduce the global flag that `platformio.ini`
+# injects through build_flags; the Waveshare BSP otherwise includes esp_lv_adapter.h,
+# which the local no-graphics stub component intentionally does not provide.
+# PlatformIO builds already pass the identical define, so this is a no-op there.
+add_compile_definitions(BSP_CONFIG_NO_GRAPHIC_LIB=1)
+
 if("$ENV{PET_P4_CHIP_FAMILY}" STREQUAL "v3")
   set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.v3.defaults")
 endif()

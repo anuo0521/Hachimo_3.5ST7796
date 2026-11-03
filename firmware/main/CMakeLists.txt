@@ -133,3 +133,18 @@ target_include_directories(${tusb_lib} PUBLIC "${CMAKE_CURRENT_LIST_DIR}")
 
 cmake_policy(SET CMP0079 NEW)
 target_link_libraries(${tusb_lib} PRIVATE ${COMPONENT_LIB})
+
+# Native idf.py builds inherit ESP-IDF's CONFIG_COMPILER_DISABLE_DEFAULT_ERRORS (=y),
+# which rewrites the global -Werror into -Werror=all. That form only downgrades per
+# diagnostic name, so the pre-existing warnings this component emits under the RISC-V
+# gcc shipped with ESP-IDF 5.5.1 are listed explicitly. Warnings stay visible; the
+# product sources are untouched. PlatformIO's toolchain does not diagnose them.
+target_compile_options(${COMPONENT_LIB} PRIVATE
+  "-Wno-error=format-truncation"
+  "-Wno-error=format"
+  "-Wno-error=format-overflow"
+  "-Wno-error=misleading-indentation"
+  "-Wno-error=stringop-truncation"
+  "-Wno-error=stringop-overflow"
+  "-Wno-error=array-bounds"
+)

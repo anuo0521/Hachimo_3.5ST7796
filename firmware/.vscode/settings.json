@@ -1,0 +1,44 @@
+{
+  "// 说明": "ESP-IDF v5.5.1（ESP32-P4 v1 板，对应 BUILD.md 的 esp32_p4_evboard 环境）",
+  "idf.eimIdfJsonPath": "D:\\Espressif\\tools\\eim_idf.json",
+  "idf.currentSetup": "D:/Espressif/frameworks/esp-idf-v5.5.1/",
+  "idf.buildPath": "${workspaceFolder}/build",
+  "idf.sdkconfigDefaults": ["sdkconfig.defaults"],
+  "idf.flashType": "UART",
+  "idf.flashBaudRate": "1500000",
+  "idf.monitorBaudRate": "4000000",
+  "idf.enableIdfComponentManager": true,
+  "idf.saveBeforeBuild": true,
+  "idf.enableSizeTaskAfterBuildTask": true,
+  "idf.openOcdConfigs": [
+    "board/esp32p4-ftdi.cfg",
+    "target/esp32p4.cfg"
+  ],
+  "// customExtraVars": "本机 GitHub 证书链被中间人替换，需合并后的 CA 包；同时绕开失效的 127.0.0.1:3531 代理",
+  "idf.customExtraVars": {
+    "SSL_CERT_FILE": "D:\\Espressif\\tools\\win-ca-bundle.pem",
+    "NO_PROXY": "*",
+    "no_proxy": "*"
+  },
+  "// CMake Tools": "本工程必须由 idf.py 用 Ninja 驱动。CMake Tools 曾用 lvgl 的 MinGW GCC 往 build/ 写 Makefile，冲掉 Ninja 缓存，之后 idf.py 报 'generator : Ninja Does not match MinGW Makefiles'，构建/Size 任务全挂。此处全部关闭它。",
+  "cmake.configureOnOpen": false,
+  "cmake.configureOnEdit": false,
+  "cmake.automaticReconfigure": false,
+  "cmake.buildBeforeRun": false,
+  "cmake.generator": "Ninja",
+  "files.exclude": {
+    "build": true,
+    "managed_components": true,
+    "sdkconfig": false,
+    "sdkconfig.old": true
+  },
+  "search.exclude": {
+    "build": true,
+    "managed_components": true
+  },
+  "files.associations": {
+    "*.h": "c",
+    "sdkconfig.defaults": "kconfig"
+  },
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json"
+}
