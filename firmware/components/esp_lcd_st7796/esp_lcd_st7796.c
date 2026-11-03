@@ -19,6 +19,7 @@
 
 static const char *TAG = "lcd_st7796";
 
+#define ST7796_CMD_SWRESET 0x01
 #define ST7796_CMD_SLPOUT 0x11
 #define ST7796_CMD_DISPOFF 0x28
 #define ST7796_CMD_DISPON 0x29
@@ -102,12 +103,19 @@ static esp_err_t panel_st7796_reset(esp_lcd_panel_t *panel) {
       .pin_bit_mask = 1ULL << st7796->reset_gpio_num,
     };
     ESP_RETURN_ON_ERROR(gpio_config(&io_conf), TAG, "configure reset gpio");
+    /* Drive the line to its idle level first so the pulse below always has a
+     * clean falling edge, matching the vendor waveform (idle 1ms, low 10ms,
+     * high 120ms). */
+    gpio_set_level(st7796->reset_gpio_num, !st7796->reset_level);
+    vTaskDelay(pdMS_TO_TICKS(1));
     gpio_set_level(st7796->reset_gpio_num, st7796->reset_level);
     vTaskDelay(pdMS_TO_TICKS(10));
     gpio_set_level(st7796->reset_gpio_num, !st7796->reset_level);
     vTaskDelay(pdMS_TO_TICKS(120));
   } else {
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(io, ST7796_CMD_SLPOUT, NULL, 0), TAG, "software reset");
+    /* No RST net: fall back to the controller's own soft reset. 0x11 only
+     * leaves sleep mode and would leave the GRAM/timing state untouched. */
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(io, ST7796_CMD_SWRESET, NULL, 0), TAG, "software reset");
     vTaskDelay(pdMS_TO_TICKS(120));
   }
   return ESP_OK;

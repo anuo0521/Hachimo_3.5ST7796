@@ -2530,7 +2530,7 @@ bool pet_p4_miniapp_sync_stats(const pet_p4_stats_model_t *stats) {
   char output[24];
   char cache[24];
   char cache_label[40];
-  char breakdown[64];
+  char breakdown[96];
   const char *agent_label;
   bool changed = false;
   if (!stats || (stats->valid == 0 && !stats->source[0] && !stats->session_title[0])) return false;
